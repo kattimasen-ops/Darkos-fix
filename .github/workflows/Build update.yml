@@ -1,0 +1,82 @@
+name: Build XU10 Repair Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      part1_url:
+        description: 'Direkter Link zu Teil 1 (.7z.001)'
+        required: true
+        type: string
+      part2_url:
+        description: 'Direkter Link zu Teil 2 (.7z.002)'
+        required: true
+        type: string
+      part3_url:
+        description: 'Direkter Link zu Teil 3 (.7z.003)'
+        required: true
+        type: string
+
+jobs:
+  build-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: System-Tools installieren
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full util-linux parted
+
+      - name: Release-Teile herunterladen
+        run: |
+          echo "Lade Teil 1 herunter..."
+          wget -O release.7z.001 "${{ github.event.inputs.part1_url }}"
+          echo "Lade Teil 2 herunter..."
+          wget -O release.7z.002 "${{ github.event.inputs.part2_url }}"
+          echo "Lade Teil 3 herunter..."
+          wget -O release.7z.003 "${{ github.event.inputs.part3_url }}"
+
+      - name: Archive zusammenfügen & entpacken
+        run: |
+          echo "Entpacke .7z Archive..."
+          7z x release.7z.001 -oextracted_img
+          ls -la extracted_img/
+
+      - name: Image mounten und Systemdateien extrahieren
+        run: |
+          IMG_FILE=$(find extracted_img -name "*.img" | head -n 1)
+          echo "Gefundenes Image: $IMG_FILE"
+          
+          # Loop-Device einrichten, um auf die Partitionen zuzugreifen
+          LOOP_DEV=$(sudo losetup --find --show -P "$IMG_FILE")
+          echo "Loop-Device: $LOOP_DEV"
+          
+          mkdir -p mnt_root repair_files/etc
+          
+          # Linux Root-Partition mounten (meist Partition 2 oder 3)
+          sudo mount "${LOOP_DEV}p2" mnt_root || sudo mount "${LOOP_DEV}p3" mnt_root
+          
+          echo "Kopiere intakte Original-Konfigurationsdateien aus /etc..."
+          sudo cp -r mnt_root/etc/os-release repair_files/etc/
+          sudo cp -r mnt_root/etc/issue repair_files/etc/
+          sudo cp -r mnt_root/etc/issue.net repair_files/etc/
+          sudo cp -r mnt_root/etc/hostname repair_files/etc/ 2>/dev/null || true
+          
+          # Aufräumen (Aushängen)
+          sudo umount mnt_root
+          sudo losetup -d "$LOOP_DEV"
+          echo "Extraktion erfolgreich abgeschlossen."
+
+      - name: update.tar erstellen
+        run: |
+          cd repair_files
+          tar -cvf ../update.tar etc/
+          cd ..
+          ls -lh update.tar
+
+      - name: update.tar als Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: xu10-repair-update-tar
+          path: update.tar

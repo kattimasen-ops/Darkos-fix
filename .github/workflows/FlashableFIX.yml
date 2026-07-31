@@ -1,0 +1,73 @@
+name: Build ROM-Safe Trimmed Image (Auto Links)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-safe-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: System-Tools installieren
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full util-linux parted xz-utils
+
+      - name: Release-Teile automatisch herunterladen
+        run: |
+          echo "Lade Teil 1 herunter..."
+          wget -O release.7z.001 "https://github.com/lcdyk0517/arkos4clone/releases/download/20260625/dArkOS4Clone-06252026.img.xz.7z.001"
+          echo "Lade Teil 2 herunter..."
+          wget -O release.7z.002 "https://github.com/lcdyk0517/arkos4clone/releases/download/20260625/dArkOS4Clone-06252026.img.xz.7z.002"
+          echo "Lade Teil 3 herunter..."
+          wget -O release.7z.003 "https://github.com/lcdyk0517/arkos4clone/releases/download/20260625/dArkOS4Clone-06252026.img.xz.7z.003"
+
+      - name: Archive zusammenfügen & entpacken
+        run: |
+          echo "Entpacke .7z Archive..."
+          7z x release.7z.001 -oextracted_img
+          
+          # XZ-komprimiertes Image entpacken (.img.xz -> .img)
+          XZ_FILE=$(find extracted_img -name "*.img.xz" | head -n 1)
+          if [ -n "$XZ_FILE" ]; then
+            unxz "$XZ_FILE"
+          else
+            XZ_FILE2=$(find extracted_img -name "*.xz" | head -n 1)
+            [ -n "$XZ_FILE2" ] && unxz "$XZ_FILE2"
+          fi
+
+      - name: Image analysieren und ROMs-Partition abschneiden
+        run: |
+          IMG_FILE=$(find extracted_img -name "*.img" | head -n 1)
+          if [ -z "$IMG_FILE" ]; then
+            echo "FEHLER: Keine .img Datei gefunden!"
+            exit 1
+          fi
+          
+          echo "Original-Größe des Images:"
+          ls -lh "$IMG_FILE"
+          
+          # Wir ermitteln den Start-Byte der letzten Partition (die ROMs-Partition)
+          PART_INFO=$(sudo parted -m "$IMG_FILE" unit b print | tail -n 1)
+          echo "Partitionsinfo der ROM-Partition: $PART_INFO"
+          
+          # Extrahiere den Start-Byte (z.B. "41943040B" -> "41943040")
+          START_BYTE=$(echo "$PART_INFO" | cut -d':' -f2 | tr -d 'B')
+          
+          if [ -n "$START_BYTE" ] && [ "$START_BYTE" -gt 0 ]; then
+            echo "Schneide Image bei Byte $START_BYTE ab (entfernt die ROMs-Partition aus dem Image)..."
+            truncate -s "$START_BYTE" "$IMG_FILE"
+            echo "Neue angepasste Image-Größe:"
+            ls -lh "$IMG_FILE"
+          else
+            echo "FEHLER: Konnte den Startpunkt der ROMs-Partition nicht ermitteln!"
+            exit 1
+          fi
+
+      - name: Modifiziertes Image als Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: xu10-safe-rom-preserving-image
+          path: extracted_img/*.img

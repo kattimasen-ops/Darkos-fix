@@ -26,7 +26,7 @@ jobs:
       - name: System-Tools installieren
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full util-linux parted
+          sudo apt-get install -y p7zip-full util-linux parted xz-utils
 
       - name: Release-Teile herunterladen
         run: |
@@ -42,11 +42,32 @@ jobs:
           echo "Entpacke .7z Archive..."
           7z x release.7z.001 -oextracted_img
           ls -la extracted_img/
+          
+          # XZ-komprimiertes Image entpacken (.img.xz -> .img)
+          echo "Suche nach .img.xz Datei und entkomprimiere..."
+          XZ_FILE=$(find extracted_img -name "*.img.xz" | head -n 1)
+          if [ -n "$XZ_FILE" ]; then
+            echo "Entkomprimiere: $XZ_FILE"
+            unxz "$XZ_FILE"
+          else
+            XZ_FILE2=$(find extracted_img -name "*.xz" | head -n 1)
+            if [ -n "$XZ_FILE2" ]; then
+              echo "Entkomprimiere Fallback: $XZ_FILE2"
+              unxz "$XZ_FILE2"
+            fi
+          fi
+          
+          ls -la extracted_img/
 
       - name: Image mounten und Systemdateien extrahieren
         run: |
           IMG_FILE=$(find extracted_img -name "*.img" | head -n 1)
           echo "Gefundenes Image: $IMG_FILE"
+          
+          if [ -z "$IMG_FILE" ]; then
+            echo "FEHLER: Keine .img Datei nach dem Entpacken gefunden!"
+            exit 1
+          fi
           
           # Loop-Device einrichten, um auf die Partitionen zuzugreifen
           LOOP_DEV=$(sudo losetup --find --show -P "$IMG_FILE")

@@ -1,20 +1,7 @@
-name: Build Full System Repair Package (with firstboot.sh)
+name: Build Full System Repair Package (Auto Links)
 
 on:
   workflow_dispatch:
-    inputs:
-      part1_url:
-        description: 'Direkter Link zu Teil 1 (.7z.001)'
-        required: true
-        type: string
-      part2_url:
-        description: 'Direkter Link zu Teil 2 (.7z.002)'
-        required: true
-        type: string
-      part3_url:
-        description: 'Direkter Link zu Teil 3 (.7z.003)'
-        required: true
-        type: string
 
 jobs:
   build-update:
@@ -28,14 +15,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y p7zip-full util-linux parted xz-utils rsync
 
-      - name: Release-Teile herunterladen
+      - name: Release-Teile automatisch herunterladen
         run: |
           echo "Lade Teil 1 herunter..."
-          wget -O release.7z.001 "${{ github.event.inputs.part1_url }}"
+          wget -O release.7z.001 "https://github.com/lcdyk0517/arkos4clone/releases/download/20260625/dArkOS4Clone-06252026.img.xz.7z.001"
           echo "Lade Teil 2 herunter..."
-          wget -O release.7z.002 "${{ github.event.inputs.part2_url }}"
+          wget -O release.7z.002 "https://github.com/lcdyk0517/arkos4clone/releases/download/20260625/dArkOS4Clone-06252026.img.xz.7z.002"
           echo "Lade Teil 3 herunter..."
-          wget -O release.7z.003 "${{ github.event.inputs.part3_url }}"
+          wget -O release.7z.003 "https://github.com/lcdyk0517/arkos4clone/releases/download/20260625/dArkOS4Clone-06252026.img.xz.7z.003"
 
       - name: Archive zusammenfügen & entpacken
         run: |
@@ -82,6 +69,9 @@ jobs:
 
       - name: update.tar und firstboot.sh generieren
         run: |
+          # Dateiberechtigungen von root auf den normalen User übertragen
+          sudo chown -R $USER:$USER final_package/
+
           # 1. update.tar aus den Systemdateien erstellen
           cd final_package
           echo "Packe update.tar..."
@@ -102,7 +92,6 @@ jobs:
 
           echo "=== System-Wiederherstellung gestartet ==="
 
-          # ROM-Partition (Easyroms) ermitteln
           ROM_DIR=""
           for dir in /roms /media/fat /storage; do
               if [ -f "$dir/update.tar" ]; then
@@ -111,7 +100,6 @@ jobs:
               fi
           done
 
-          # Fallback, falls der Pfad abweicht
           if [ -z "$ROM_DIR" ]; then
               for dir in /roms /media/fat /storage; do
                   if [ -d "$dir" ]; then
@@ -134,7 +122,6 @@ jobs:
               echo "[FEHLER] update.tar wurde nicht gefunden!"
           fi
 
-          # Firstboot Skript selbst löschen, damit es nicht in einer Schleife läuft
           rm -f /boot/firstboot.sh 2>/dev/null
           rm -f /firstboot.sh 2>/dev/null
 

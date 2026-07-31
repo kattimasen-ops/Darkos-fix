@@ -1,4 +1,4 @@
-name: Build XU10 Repair Update
+name: Build Full System Repair Package (with firstboot.sh)
 
 on:
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
       - name: System-Tools installieren
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full util-linux parted xz-utils
+          sudo apt-get install -y p7zip-full util-linux parted xz-utils rsync
 
       - name: Release-Teile herunterladen
         run: |
@@ -41,63 +41,112 @@ jobs:
         run: |
           echo "Entpacke .7z Archive..."
           7z x release.7z.001 -oextracted_img
-          ls -la extracted_img/
           
           # XZ-komprimiertes Image entpacken (.img.xz -> .img)
-          echo "Suche nach .img.xz Datei und entkomprimiere..."
           XZ_FILE=$(find extracted_img -name "*.img.xz" | head -n 1)
           if [ -n "$XZ_FILE" ]; then
-            echo "Entkomprimiere: $XZ_FILE"
             unxz "$XZ_FILE"
           else
             XZ_FILE2=$(find extracted_img -name "*.xz" | head -n 1)
-            if [ -n "$XZ_FILE2" ]; then
-              echo "Entkomprimiere Fallback: $XZ_FILE2"
-              unxz "$XZ_FILE2"
-            fi
+            [ -n "$XZ_FILE2" ] && unxz "$XZ_FILE2"
           fi
-          
-          ls -la extracted_img/
 
-      - name: Image mounten und Systemdateien extrahieren
+      - name: System mounten und exklusive ROMs extrahieren
         run: |
           IMG_FILE=$(find extracted_img -name "*.img" | head -n 1)
-          echo "Gefundenes Image: $IMG_FILE"
-          
           if [ -z "$IMG_FILE" ]; then
-            echo "FEHLER: Keine .img Datei nach dem Entpacken gefunden!"
+            echo "FEHLER: Keine .img Datei gefunden!"
             exit 1
           fi
           
-          # Loop-Device einrichten, um auf die Partitionen zuzugreifen
           LOOP_DEV=$(sudo losetup --find --show -P "$IMG_FILE")
-          echo "Loop-Device: $LOOP_DEV"
+          mkdir -p mnt_root final_package
           
-          mkdir -p mnt_root repair_files/etc
-          
-          # Linux Root-Partition mounten (meist Partition 2 oder 3)
+          # Linux Root-Partition mounten
           sudo mount "${LOOP_DEV}p2" mnt_root || sudo mount "${LOOP_DEV}p3" mnt_root
           
-          echo "Kopiere intakte Original-Konfigurationsdateien aus /etc..."
-          sudo cp -r mnt_root/etc/os-release repair_files/etc/
-          sudo cp -r mnt_root/etc/issue repair_files/etc/
-          sudo cp -r mnt_root/etc/issue.net repair_files/etc/
-          sudo cp -r mnt_root/etc/hostname repair_files/etc/ 2>/dev/null || true
+          echo "Kopiere Systemdateien (ohne ROMs)..."
+          sudo rsync -a \
+            --exclude='/roms' \
+            --exclude='/media' \
+            --exclude='/lost+found' \
+            --exclude='/proc' \
+            --exclude='/sys' \
+            --exclude='/dev' \
+            --exclude='/run' \
+            --exclude='/mnt' \
+            mnt_root/ final_package/
           
-          # Aufräumen (Aushängen)
           sudo umount mnt_root
           sudo losetup -d "$LOOP_DEV"
-          echo "Extraktion erfolgreich abgeschlossen."
 
-      - name: update.tar erstellen
+      - name: update.tar und firstboot.sh generieren
         run: |
-          cd repair_files
-          tar -cvf ../update.tar etc/
+          # 1. update.tar aus den Systemdateien erstellen
+          cd final_package
+          echo "Packe update.tar..."
+          tar -cvf ../update.tar .
           cd ..
-          ls -lh update.tar
+          
+          # Ordner für das finale Artefakt vorbereiten
+          mkdir -p artifact_out
+          mv update.tar artifact_out/
+          
+          # 2. Automatische firstboot.sh erstellen
+          echo "Erstelle firstboot.sh..."
+          cat << 'EOF' > artifact_out/firstboot.sh
+          #!/bin/bash
+          # =========================================================
+          # Automatische System-Reparatur für ArkOS4Clones
+          # =========================================================
 
-      - name: update.tar als Artefakt hochladen
+          echo "=== System-Wiederherstellung gestartet ==="
+
+          # ROM-Partition (Easyroms) ermitteln
+          ROM_DIR=""
+          for dir in /roms /media/fat /storage; do
+              if [ -f "$dir/update.tar" ]; then
+                  ROM_DIR="$dir"
+                  break
+              fi
+          done
+
+          # Fallback, falls der Pfad abweicht
+          if [ -z "$ROM_DIR" ]; then
+              for dir in /roms /media/fat /storage; do
+                  if [ -d "$dir" ]; then
+                      ROM_DIR="$dir"
+                      break
+                  fi
+              done
+          fi
+
+          UPDATE_ARCHIVE="$ROM_DIR/update.tar"
+
+          if [ -f "$UPDATE_ARCHIVE" ]; then
+              echo "[INFO] update.tar auf ROMs-Partition gefunden. Spiele System-Dateien auf..."
+              tar -xvf "$UPDATE_ARCHIVE" -C /
+              
+              echo "[INFO] Lösche update.tar nach erfolgreichem Update..."
+              rm -f "$UPDATE_ARCHIVE"
+              echo "[INFO] System-Wiederherstellung erfolgreich abgeschlossen!"
+          else
+              echo "[FEHLER] update.tar wurde nicht gefunden!"
+          fi
+
+          # Firstboot Skript selbst löschen, damit es nicht in einer Schleife läuft
+          rm -f /boot/firstboot.sh 2>/dev/null
+          rm -f /firstboot.sh 2>/dev/null
+
+          sync
+          echo "=== Neustart wird eingeleitet ==="
+          EOF
+          
+          chmod +x artifact_out/firstboot.sh
+          ls -lh artifact_out/
+
+      - name: Paket als Artefakt hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: xu10-repair-update-tar
-          path: update.tar
+          name: xu10-complete-repair-package
+          path: artifact_out/
